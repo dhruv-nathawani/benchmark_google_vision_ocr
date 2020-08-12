@@ -30,6 +30,18 @@ def PolyArea(x, y):
     return 0.5*np.abs(np.dot(x, np.roll(y, 1))-np.dot(y, np.roll(x, 1)))
 
 
+def convert_bbox_to_vertices(bbox):
+    x1 = bbox[0] #top_left['x']
+    y1 = bbox[1] #top_left['y']
+    x2 = bbox[2] #bottom_right['x']
+    y2 = bbox[1] #top_left['y']
+    x3 = bbox[2] #bottom_right['x']
+    y3 = bbox[3] #bottom_right['y']
+    x4 = bbox[0] #top_left['x']
+    y4 = bbox[3] #bottom_right['y']
+    return x1, y1, x2, y2, x3, y3, x4, y4
+
+
 def box_iou(box1, box2):
     '''Compute the intersection over union of two set of boxes.
     The box order must be (xmin, ymin, xmax, ymax).
@@ -387,6 +399,15 @@ def page_image_benchmark():
             ious = box_iou(torch.from_numpy(np.array(gt_image_bbox).astype('float')),
                            torch.from_numpy(np.array(google_bbox).astype('float')))
             torch.set_printoptions(edgeitems=100)
+            google_vertices = [convert_bbox_to_vertices(box) for box in google_bbox]
+            #with open(os.path.join('google_text_predictions', '{}.txt'.format(image_id)), "w") as file:
+            with open(os.path.join('google_text_predictions', image_id + '.txt'), 'w') as file:
+                for i in range(len(google_vertices)):
+                    file.write("{} {} {} {} {} {} {} {} ".format(google_vertices[i][0], google_vertices[i][1], google_vertices[i][2],
+                                                                google_vertices[i][3], google_vertices[i][4], google_vertices[i][5],
+                                                                google_vertices[i][6], google_vertices[i][7]))
+                    file.write(google_bbox_word_predictions[i] + '\n')
+
             #print(ious)
             #print(ious.max(dim=1))
             #print(ious.shape)
@@ -395,7 +416,7 @@ def page_image_benchmark():
 
             google_bbox.append(hw_rect_dict[image_id])
 
-            plot_gt_pred_bbox(image_path, google_bbox, gt_image_bbox)
+            #plot_gt_pred_bbox(image_path, google_bbox, gt_image_bbox)
 
             values_1, indices_1 = ious.max(dim=1)
             tp_mask = values_1 > 0.5
