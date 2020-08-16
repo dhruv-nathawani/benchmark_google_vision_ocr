@@ -5,7 +5,7 @@ import os
 import numpy as np
 import pandas as pd
 import torch
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from google.cloud import vision
 from joblib import Parallel, delayed
 import xml.etree.ElementTree as ET
@@ -14,6 +14,7 @@ from joblib import Parallel, delayed
 from math import sqrt
 from collections import defaultdict
 from itertools import compress
+import sys
 
 
 def detect_text_google_vision(path):
@@ -78,18 +79,29 @@ def plot_google_result(image_path, google_response):
     image.show()
 
 
-def plot_gt_pred_bbox(image_path, pred_bbox, gt_bbox):
+def plot_gt_pred_bbox(image_path, pred_bbox, gt_bbox, google_bbox_word_predictions, gt_words):
     image = Image.open(image_path)
-    draw = ImageDraw.Draw(image)
-    for result in pred_bbox:
+    fontsize = 30
+    font = ImageFont.truetype("arial.ttf", fontsize)
+    image_rgb = Image.open(image_path).convert('RGBA')
+    draw = ImageDraw.Draw(image_rgb)
+    for i, result in enumerate(pred_bbox):
         box = (result[0], result[1], result[2], result[3])
-        draw.rectangle(box, outline=(0))
-    image.show()
-    image = Image.open(image_path)
-    draw = ImageDraw.Draw(image)
-    for result in gt_bbox:
-        draw.rectangle(result, outline=(0))
-    image.show()
+        draw.rectangle(box, outline=(255, 0, 0), width=2)
+        draw.text((box[0], box[1] - 10), google_bbox_word_predictions[i], font=font, fill='red')
+
+    for i, result in enumerate(gt_bbox):
+        box = (result[0], result[1], result[2], result[3])
+        draw.rectangle(box, outline=(0, 255, 0))
+        draw.text((box[0], box[3] - 10), gt_words[i], font=font, fill='green')
+    image_name = image_path.split('/')[-1]
+    image_rgb.save(os.path.join('google_predictions',  image_name))
+    #image.show()
+    #image = Image.open(image_path)
+    #draw = ImageDraw.Draw(image)
+    #for result in gt_bbox:
+    #    draw.rectangle(result, outline=(0))
+    #image.show()
 
 
 def convert_bbox_to_xyxy(bbox):
@@ -247,14 +259,7 @@ def word_image_benchmarking():
                 if file_id in test_indices:
                     image_list.append(os.path.join(root, file))
 
-    # with open(gt_json_path) as fd:
-    #     gt_json = json.load(fd)
-    # gt_annotations_df = pd.DataFrame(gt_json['annotations'])
-    # gt_images_df = pd.DataFrame(gt_json['images'])
-    # gt_df = gt_annotations_df.merge(
-    #     gt_images_df, left_on='image_id', right_on='id')
-
-    image_list = image_list[:50]
+    #image_list = image_list[:50]
 
     tp_total, fp_total, fn_total = 0., 0., 0.
     cer_s = 0
@@ -267,9 +272,7 @@ def word_image_benchmarking():
     for image_path in tqdm(image_list):
         gt_text, gt_image_bbox, google_response = compute_score(image_path, gt_data_path)
         if not google_response:
-            #n_total += 1 #########
             pred_text = ''
-            # continue
         else:
             pred_text = google_response[1].description # google_response[0].description always has a \n at the end
             google_bbox = get_google_bbox(google_response)
@@ -279,24 +282,16 @@ def word_image_benchmarking():
         if pred_text.lower() == gt_text.lower():
             n_correct_nocase += 1
 
-        #response_string = "\n".join(google_response)
-
         _, (s, i, d) = levenshtein(gt_text.lower(), pred_text.lower())
         cer_s += s
         cer_i += i
         cer_d += d
         cer_n += len(gt_text.lower())
 
-        #ious = box_iou(torch.from_numpy(np.array(gt_image_bbox).astype('float')), torch.from_numpy(np.array(google_bbox).astype('float')))
-
         tp_total += tp
         fp_total += fp
         fn_total += fn
         n_total += 1
-        #print('\n')
-        #print('The GT text is :', gt_text)
-        #print('The Pred text is :', pred_text)
-        #print('\n')
 
         data = {}
         data['pred_text'] = pred_text
@@ -346,8 +341,8 @@ def page_image_benchmark():
             for file in files:
                 file_id = file.split('.')[0]
                 #file_id = file_id[:-1]
-                #if file_id in test_indices:
-                image_list.append(os.path.join(root, file))
+                if file_id in test_indices:
+                    image_list.append(os.path.join(root, file))
 
     #image_list = image_list[:50]
 
@@ -361,6 +356,7 @@ def page_image_benchmark():
     with open(label_path) as f:
         content = f.readlines()
     gt_dict = defaultdict(lambda: defaultdict(list))
+    gt_dict_2 = {}
     gt_dict_words = defaultdict(list)
 
     for gt in content:
@@ -370,24 +366,41 @@ def page_image_benchmark():
         word_id = line[0]
         image_id = line[0][:-6]
         bbox = [int(line[3]), int(line[4]), int(line[5]) + int(line[3]), int(line[6]) + int(line[4])]
+        if image_id not in gt_dict_2:
+            gt_dict_2[image_id] = []
+            bboxes = [bbox]
+        else:
+            bboxes.append(bbox)
+            gt_dict_2[image_id] = bboxes
         gt_dict[image_id][word_id] = bbox
         gt_dict_words[image_id].append(line[8])
 
-    x_min, y_min, x_max, y_max = 100000, 100000, 0, 0
     hw_rect_dict = defaultdict(list)
     for image_id, bbox_dict in gt_dict.items():
+        if image_id == 'a01-030':
+            image_id = image_id
+        x_min, y_min, x_max, y_max = sys.maxsize, sys.maxsize, -sys.maxsize, -sys.maxsize
         bbox_list = list(gt_dict[image_id].values())
         for bbox in bbox_list:
-            x_min = min(x_min, bbox[0])
-            y_min = min(y_min, bbox[1])
-            x_max = max(x_max, bbox[2])
-            y_max = max(y_max, bbox[3])
+            if all(i > 0 for i in bbox):
+                x_min = min(x_min, bbox[0])
+                y_min = min(y_min, bbox[1])
+                x_max = max(x_max, bbox[2])
+                y_max = max(y_max, bbox[3])
 
         hw_rect_dict[image_id] = [x_min, y_min, x_max, y_max]
-        x_min, y_min, x_max, y_max = 10000, 10000, 0, 0
 
     for image_path in tqdm(image_list):
-        #'a04-006.png'
+        image_id = os.path.split(image_path)[1].split('.')[0]
+        vertices = [convert_bbox_to_vertices(box) for box in gt_dict_2[image_id]]
+        with open(os.path.join('iam_text_groundtruth', image_id + '.txt'), 'w') as file:
+            for i in range(len(vertices)):
+                file.write("{},{},{},{},{},{},{},{},".format(vertices[i][0], vertices[i][1], vertices[i][2],
+                                                      vertices[i][3], vertices[i][4], vertices[i][5],
+                                                      vertices[i][6], vertices[i][7]))
+                file.write(gt_dict_words[image_id][i] + '\n')
+
+    for image_path in tqdm(image_list):
         image_id = os.path.split(image_path)[1].split('.')[0]
         gt_image_bbox = list(gt_dict[image_id].values())
         google_response = compute_score(image_path, gt_dict)
@@ -400,38 +413,29 @@ def page_image_benchmark():
                            torch.from_numpy(np.array(google_bbox).astype('float')))
             torch.set_printoptions(edgeitems=100)
             google_vertices = [convert_bbox_to_vertices(box) for box in google_bbox]
-            #with open(os.path.join('google_text_predictions', '{}.txt'.format(image_id)), "w") as file:
             with open(os.path.join('google_text_predictions', image_id + '.txt'), 'w') as file:
                 for i in range(len(google_vertices)):
-                    file.write("{} {} {} {} {} {} {} {} ".format(google_vertices[i][0], google_vertices[i][1], google_vertices[i][2],
+                    file.write("{},{},{},{},{},{},{},{},".format(google_vertices[i][0], google_vertices[i][1], google_vertices[i][2],
                                                                 google_vertices[i][3], google_vertices[i][4], google_vertices[i][5],
                                                                 google_vertices[i][6], google_vertices[i][7]))
                     file.write(google_bbox_word_predictions[i] + '\n')
 
-            #print(ious)
-            #print(ious.max(dim=1))
-            #print(ious.shape)
-            #print(len(gt_image_bbox), len(gt_image_bbox[0]))
-            ##print(len(google_bbox), len(google_bbox[0]))
-
-            google_bbox.append(hw_rect_dict[image_id])
-
-            #plot_gt_pred_bbox(image_path, google_bbox, gt_image_bbox)
+            #google_bbox.append(hw_rect_dict[image_id])
+            #print(hw_rect_dict[image_id], image_id)
+            plot_gt_pred_bbox(image_path, google_bbox, gt_image_bbox,
+                              google_bbox_word_predictions, gt_dict_words[image_id])
 
             values_1, indices_1 = ious.max(dim=1)
             tp_mask = values_1 > 0.5
-            d_tp = (tp_mask).sum().item()
+            d_tp = tp_mask.sum().item()
 
             r_tp_list = []
-            #print('l1', len(gt_dict_words[image_id]))
-            #print('l2', len(google_bbox_word_predictions))
             for i in range(len(gt_dict_words[image_id])):
                 if gt_dict_words[image_id][i] == google_bbox_word_predictions[indices_1[i]]:
                     # Recognition True Positive
                     r_tp_list.append(i)
             r_tp = len(list(compress(r_tp_list, tp_mask)))
             r_fp = len(google_bbox_word_predictions) - r_tp
-            #print('Recognition True Positive', r_tp)
 
             #d_tp = (ious.max(dim=1)[0] > 0.5).sum().item()
             d_fp = (ious.max(dim=0)[0] < 0.5).sum().item()
@@ -445,14 +449,8 @@ def page_image_benchmark():
         r_tp_total += r_tp
         r_fp_total += r_fp
         r_fn_total += r_fn
-        #print('\n')
-        #print('The GT text is :', gt_text)
-        #print('The Pred text is :', pred_text)
-        #print('\n')
 
         data = {}
-        #data['pred_text'] = pred_text
-        #data['gt_text'] = gt_text
         data['image_path'] = image_path
         output['responses'].append(data)
 
